@@ -1,0 +1,38 @@
+[project]
+name = "caddyparser"
+version = "0.1.0"
+description = "Compact static analytics reports for Caddy JSON access logs"
+authors = [
+    { name = "Dobin Rutishauser", email = "dobin.rutishauser@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "jinja2>=3.1,<4",
+    "sqlalchemy>=2.0,<3",
+]
+
+[project.scripts]
+caddyparser = "caddyparser.cli:main"
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.uv.build-backend]
+module-root = "src"
+source-include = [
+    "src/caddyparser/templates/**",
+    "src/caddyparser/web/**",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]

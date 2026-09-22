@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Caddy traffic</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">CADDY ANALYTICS</p><h1>Traffic overview</h1></div>
+    <p id="generated">Generated {{ generated_at }} · UTC</p>
+  </header>
+  <main>
+    <section class="controls" aria-label="Report controls">
+      <label>Time range<select id="range">
+        {% for key, label in ranges.items() %}<option value="{{ key }}"{% if key == default_range %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select></label>
+      <span id="status" role="status">Loading…</span>
+    </section>
+    <section class="card wide">
+      <div class="heading"><div><p class="eyebrow">REQUESTS</p><h2>Activity by domain</h2></div></div>
+      <div id="activity" class="chart" role="img" aria-label="Hits and visitors by domain"></div>
+    </section>
+    <section class="card wide">
+      <div class="heading"><div><p class="eyebrow">BANDWIDTH</p><h2>Bytes transmitted</h2></div></div>
+      <div id="bandwidth" class="chart" role="img" aria-label="Bytes transmitted by domain"></div>
+    </section>
+    <section class="card wide">
+      <div class="heading"><div><p class="eyebrow">TIMELINE</p><h2>Traffic over time</h2></div>
+        <label>Domain<select id="domain"><option value="all">All domains</option></select></label>
+      </div>
+      <div id="timeline" class="chart line" role="img" aria-label="Hits and visitors over time"></div>
+    </section>
+    <section class="tops wide">
+      <div class="heading"><div><p class="eyebrow">POPULAR CONTENT</p><h2>Top 10</h2></div>
+        <label>Rank by<select id="metric"><option value="hits">Hits</option><option value="visitors">Visitors</option></select></label>
+      </div>
+      <div class="tables">
+        {% for key, title in (("domains", "Domains"), ("sections", "Sections"), ("urls", "Full URLs")) %}
+        <article class="card"><h3>{{ title }}</h3><table><thead><tr><th>Content</th><th>Hits</th><th>Visitors</th></tr></thead><tbody id="top-{{ key }}"></tbody></table></article>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>
