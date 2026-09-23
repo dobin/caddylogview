@@ -3,28 +3,28 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, inspect, select, text
+from sqlalchemy import Engine, create_engine, event, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .hll import union_bytes
 from .models import Base, Metadata
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
-def _migrate(engine: Engine) -> None:
-    inspector = inspect(engine)
-    if "events" not in inspector.get_table_names():
+def _check_schema(engine: Engine) -> None:
+    tables = set(inspect(engine).get_table_names())
+    if not tables or "metadata" not in tables:
         return
-    columns = {column["name"] for column in inspector.get_columns("events")}
-    if "record_key" not in columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE events ADD COLUMN record_key BLOB"))
-            connection.execute(
-                text("CREATE UNIQUE INDEX ix_events_record_key ON events (record_key)")
-            )
-            connection.execute(
-                text("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
-            )
+    with engine.connect() as connection:
+        version = connection.execute(
+            select(Metadata.value).where(Metadata.key == "schema_version")
+        ).scalar_one_or_none()
+    if version != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Unsupported database schema {version or 'unknown'}; expected {SCHEMA_VERSION}. "
+            "Move or delete the old database and replay retained .log.gz rotations."
+        )
 
 
 def create_database(path: str | Path) -> tuple[Engine, sessionmaker[Session]]:
@@ -33,24 +33,22 @@ def create_database(path: str | Path) -> tuple[Engine, sessionmaker[Session]]:
     engine = create_engine(f"sqlite:///{database}")
 
     @event.listens_for(engine, "connect")
-    def configure_sqlite(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+    def configure_sqlite(dbapi_connection, connection_record) -> None:  # type: ignore[no-untyped-def]
+        del connection_record
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.close()
+        dbapi_connection.create_function("hll_union", 2, union_bytes, deterministic=True)
 
-    _migrate(engine)
+    _check_schema(engine)
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory.begin() as session:
         version = session.get(Metadata, "schema_version")
         if version is None:
             session.add(Metadata(key="schema_version", value=SCHEMA_VERSION))
-        elif version.value != SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Unsupported database schema {version.value}; expected {SCHEMA_VERSION}"
-            )
         if session.get(Metadata, "visitor_key") is None:
             session.add(Metadata(key="visitor_key", value=secrets.token_hex(32)))
     return engine, factory

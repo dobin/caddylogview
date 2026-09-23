@@ -21,7 +21,7 @@
     </section>
     <section class="card wide">
       <div class="heading"><div><p class="eyebrow">REQUESTS</p><h2>Activity by domain</h2></div></div>
-      <div id="activity" class="chart" role="img" aria-label="Hits and visitors by domain"></div>
+      <div id="activity" class="chart" role="img" aria-label="Hits and estimated visitors by domain"></div>
     </section>
     <section class="card wide">
       <div class="heading"><div><p class="eyebrow">BANDWIDTH</p><h2>Bytes transmitted</h2></div></div>
@@ -31,15 +31,15 @@
       <div class="heading"><div><p class="eyebrow">TIMELINE</p><h2>Traffic over time</h2></div>
         <label>Domain<select id="domain"><option value="all">All domains</option></select></label>
       </div>
-      <div id="timeline" class="chart line" role="img" aria-label="Hits and visitors over time"></div>
+      <div id="timeline" class="chart line" role="img" aria-label="Hits and estimated visitors over time"></div>
     </section>
     <section class="tops wide">
       <div class="heading"><div><p class="eyebrow">POPULAR CONTENT</p><h2>Top 10</h2></div>
-        <label>Rank by<select id="metric"><option value="hits">Hits</option><option value="visitors">Visitors</option></select></label>
+        <label>Rank by<select id="metric"><option value="hits">Hits</option><option value="visitors">Estimated visitors</option></select></label>
       </div>
       <div class="tables">
-        {% for key, title in (("domains", "Domains"), ("sections", "Sections"), ("urls", "Full URLs")) %}
-        <article class="card"><h3>{{ title }}</h3><table><thead><tr><th>Content</th><th>Hits</th><th>Visitors</th></tr></thead><tbody id="top-{{ key }}"></tbody></table></article>
+        {% for key, title in (("domains", "Domains"), ("sections", "Sections")) %}
+        <article class="card"><h3>{{ title }}</h3><table><thead><tr><th>Content</th><th>Hits</th><th>Est. visitors</th></tr></thead><tbody id="top-{{ key }}"></tbody></table></article>
         {% endfor %}
       </div>
     </section>

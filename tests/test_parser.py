@@ -24,7 +24,6 @@ def record(**overrides):
 def test_parses_only_analytics_fields():
     event = parse_line(record(), b"k" * 32)
     assert event.host == "example.com"
-    assert event.path == "/docs/guide"
     assert event.first_path == "/docs"
     assert event.bytes_sent == 42
     assert len(event.visitor) == 16

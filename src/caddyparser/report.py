@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .aggregate import (
@@ -17,10 +17,9 @@ from .aggregate import (
     build_windows,
     domain_summary,
     domain_time_series,
-    time_series,
     top_content,
 )
-from .models import Event
+from .models import AggregateBounds, HourlyAggregate
 
 PACKAGE = Path(__file__).parent
 
@@ -38,10 +37,15 @@ def build_report(factory: sessionmaker[Session], output: str | Path) -> Path:
         data_dir = temporary / "data"
         with factory() as session:
             windows = build_windows(session)
-            data_bounds = session.execute(
-                select(func.min(Event.timestamp), func.max(Event.timestamp))
-            ).one()
-            hosts = list(session.scalars(select(Event.host).distinct().order_by(Event.host)))
+            bounds = session.get(AggregateBounds, 1)
+            data_bounds = (
+                (bounds.minimum_timestamp, bounds.maximum_timestamp) if bounds else (None, None)
+            )
+            hosts = list(
+                session.scalars(
+                    select(HourlyAggregate.host).distinct().order_by(HourlyAggregate.host)
+                )
+            )
             domain_ids = {
                 host: "d-" + hashlib.sha256(host.encode()).hexdigest()[:12] for host in hosts
             }
@@ -71,9 +75,9 @@ def build_report(factory: sessionmaker[Session], output: str | Path) -> Path:
                         "top": top_content(session, window),
                     },
                 )
-                files = {"all": f"data/series/{key}-all.json"}
-                _write_json(temporary / files["all"], time_series(session, window))
                 domain_series = domain_time_series(session, window, hosts)
+                files = {"all": f"data/series/{key}-all.json"}
+                _write_json(temporary / files["all"], domain_series["all"])
                 for host in hosts:
                     files[domain_ids[host]] = f"data/series/{key}-{domain_ids[host]}.json"
                     _write_json(temporary / files[domain_ids[host]], domain_series[host])

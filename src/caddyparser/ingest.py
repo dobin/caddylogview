@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-import hashlib
 import gzip
-import hmac
-import os
+import hashlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from .db import visitor_key
-from .models import Event, ImportState
+from .hll import HyperLogLog
+from .models import AggregateBounds, ConsumedFile, HourlyAggregate
 from .parser import ParseError, parse_line
 
-PREFIX_SIZE = 4096
-BATCH_SIZE = 4000
-LOG_PATTERNS = ("*.log", "*.log.gz")
+LOG_PATTERN = "*.log.gz"
 
 
 @dataclass(slots=True)
@@ -26,71 +24,45 @@ class ImportResult:
     read: int = 0
     imported: int = 0
     errors: int = 0
-    incomplete: bool = False
+    consumed: bool = False
+    duplicate: bool = False
 
 
-def _prefix_hash(file) -> str:  # type: ignore[no-untyped-def]
-    position = file.tell()
-    file.seek(0)
-    digest = hashlib.sha256(file.readline(PREFIX_SIZE)).hexdigest()
-    file.seek(position)
-    return digest
+@dataclass(slots=True)
+class _Delta:
+    hits: int
+    bytes_sent: int
+    visitors: HyperLogLog
 
 
 def discover_logs(path: str | Path) -> list[Path]:
     source = Path(path).expanduser().resolve()
     if not source.is_dir():
+        if not source.name.endswith(".log.gz"):
+            raise ValueError(f"Only completed .log.gz rotations are supported: {source}")
         return [source]
-    files = {
-        candidate.resolve()
-        for pattern in LOG_PATTERNS
-        for candidate in source.glob(pattern)
-        if candidate.is_file()
-    }
-    return sorted(files, key=lambda candidate: (candidate.name == "access.log", candidate.name))
-
-
-def _open_log(source: Path):  # type: ignore[no-untyped-def]
-    if source.suffix == ".gz":
-        return gzip.open(source, "rb")
-    return source.open("rb")
+    return sorted(candidate.resolve() for candidate in source.glob(LOG_PATTERN) if candidate.is_file())
 
 
 def import_log(
     factory: sessionmaker[Session], path: str | Path, *, strict: bool = False
 ) -> ImportResult:
     source = Path(path).expanduser().resolve()
+    if not source.name.endswith(".log.gz"):
+        raise ValueError(f"Only completed .log.gz rotations are supported: {source}")
     result = ImportResult(path=source)
-    compressed = source.suffix == ".gz"
-    with _open_log(source) as file:
-        stat = os.fstat(file.fileno())
-        prefix = _prefix_hash(file)
+    stat = source.stat()
+    digest = hashlib.sha256()
+    deltas: dict[tuple[int, str, str], _Delta] = {}
+    minimum: float | None = None
+    maximum: float | None = None
 
-        with factory() as session:
-            state = session.get(ImportState, str(source))
-            resume = bool(
-                state
-                and state.device == stat.st_dev
-                and state.inode == stat.st_ino
-                and (compressed or stat.st_size >= state.offset)
-                and state.prefix_hash == prefix
-            )
-            start_offset = state.offset if resume and state else 0
-            key = visitor_key(session)
+    with factory() as session:
+        key = visitor_key(session)
 
-        file.seek(start_offset)
-        batch: list[dict[str, object]] = []
-        committed_offset = start_offset
-
-        while True:
-            line_start = file.tell()
-            line = file.readline()
-            if not line:
-                break
-            if not line.endswith(b"\n"):
-                result.incomplete = True
-                file.seek(line_start)
-                break
+    with gzip.open(source, "rb") as file:
+        while line := file.readline():
+            digest.update(line)
             result.read += 1
             try:
                 event = parse_line(line, key)
@@ -98,56 +70,83 @@ def import_log(
                 result.errors += 1
                 if strict:
                     raise
-            else:
-                batch.append(
-                    {
-                        "timestamp": event.timestamp,
-                        "host": event.host,
-                        "path": event.path,
-                        "first_path": event.first_path,
-                        "status": event.status,
-                        "bytes_sent": event.bytes_sent,
-                        "visitor": event.visitor,
-                        "record_key": hmac.digest(key, line, "sha256"),
-                    }
-                )
-            committed_offset = file.tell()
-            if len(batch) >= BATCH_SIZE:
-                result.imported += _commit_batch(
-                    factory, batch, source, stat, prefix, committed_offset
-                )
-                batch.clear()
+                continue
+            hour_start = int(event.timestamp // 3_600) * 3_600
+            aggregate_key = (hour_start, event.host, event.first_path)
+            delta = deltas.get(aggregate_key)
+            if delta is None:
+                delta = _Delta(0, 0, HyperLogLog())
+                deltas[aggregate_key] = delta
+            delta.hits += 1
+            delta.bytes_sent += event.bytes_sent
+            delta.visitors.add(event.visitor)
+            minimum = event.timestamp if minimum is None else min(minimum, event.timestamp)
+            maximum = event.timestamp if maximum is None else max(maximum, event.timestamp)
 
-        result.imported += _commit_batch(factory, batch, source, stat, prefix, committed_offset)
-    return result
-
-
-def _commit_batch(
-    factory: sessionmaker[Session],
-    batch: list[dict[str, object]],
-    source: Path,
-    stat: os.stat_result,
-    prefix: str,
-    offset: int,
-) -> int:
+    content_sha256 = digest.digest()
     with factory.begin() as session:
-        imported = 0
-        if batch:
-            statement = insert(Event).values(batch).on_conflict_do_nothing()
+        claimed = session.execute(
+            insert(ConsumedFile)
+            .values(
+                content_sha256=content_sha256,
+                path=str(source),
+                compressed_size=stat.st_size,
+                mtime_ns=stat.st_mtime_ns,
+                processed_at=time.time(),
+                records_read=result.read,
+                records_imported=result.read - result.errors,
+                errors=result.errors,
+            )
+            .on_conflict_do_nothing(index_elements=[ConsumedFile.content_sha256])
+            .returning(ConsumedFile.content_sha256)
+        ).scalar_one_or_none()
+        if claimed is None:
+            result.duplicate = True
+            return result
+
+        for (hour_start, host, first_path), delta in deltas.items():
+            statement = insert(HourlyAggregate).values(
+                hour_start=hour_start,
+                host=host,
+                first_path=first_path,
+                hits=delta.hits,
+                bytes_sent=delta.bytes_sent,
+                visitor_hll=delta.visitors.to_bytes(),
+            )
+            statement = statement.on_conflict_do_update(
+                index_elements=[
+                    HourlyAggregate.hour_start,
+                    HourlyAggregate.host,
+                    HourlyAggregate.first_path,
+                ],
+                set_={
+                    "hits": HourlyAggregate.hits + statement.excluded.hits,
+                    "bytes_sent": HourlyAggregate.bytes_sent + statement.excluded.bytes_sent,
+                    "visitor_hll": func.hll_union(
+                        HourlyAggregate.visitor_hll, statement.excluded.visitor_hll
+                    ),
+                },
+            )
             session.execute(statement)
-            imported = int(session.scalar(select(func.changes())) or 0)
-        state = session.get(ImportState, str(source))
-        values = {
-            "device": stat.st_dev,
-            "inode": stat.st_ino,
-            "offset": offset,
-            "prefix_hash": prefix,
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        }
-        if state is None:
-            session.add(ImportState(path=str(source), **values))
-        else:
-            for name, value in values.items():
-                setattr(state, name, value)
-        return imported
+
+        if minimum is not None and maximum is not None:
+            statement = insert(AggregateBounds).values(
+                id=1, minimum_timestamp=minimum, maximum_timestamp=maximum
+            )
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[AggregateBounds.id],
+                    set_={
+                        "minimum_timestamp": func.min(
+                            AggregateBounds.minimum_timestamp, statement.excluded.minimum_timestamp
+                        ),
+                        "maximum_timestamp": func.max(
+                            AggregateBounds.maximum_timestamp, statement.excluded.maximum_timestamp
+                        ),
+                    },
+                )
+            )
+
+    result.imported = result.read - result.errors
+    result.consumed = True
+    return result

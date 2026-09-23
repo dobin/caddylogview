@@ -15,9 +15,11 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
 
     def database_option(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--database", default="caddyparser.sqlite3", help="SQLite cache path")
+        command.add_argument(
+            "--database", default="caddyparser.sqlite3", help="SQLite aggregate/state path"
+        )
 
-    importing = commands.add_parser("import", help="Incrementally import access logs")
+    importing = commands.add_parser("import", help="Import completed .log.gz rotations")
     importing.add_argument("logs", nargs="+", type=Path)
     importing.add_argument("--strict", action="store_true", help="Stop on the first malformed record")
     database_option(importing)
@@ -26,7 +28,7 @@ def parser() -> argparse.ArgumentParser:
     building.add_argument("--output", default="report", help="Output directory")
     database_option(building)
 
-    updating = commands.add_parser("update", help="Import logs and generate the report")
+    updating = commands.add_parser("update", help="Import completed rotations and generate the report")
     updating.add_argument("logs", nargs="+", type=Path)
     updating.add_argument("--strict", action="store_true", help="Stop on the first malformed record")
     updating.add_argument("--output", default="report", help="Output directory")
@@ -50,11 +52,13 @@ def main(argv: list[str] | None = None) -> None:
             for log in logs:
                 result = import_log(factory, log, strict=arguments.strict)
                 total += result.imported
-                suffix = "; incomplete final line deferred" if result.incomplete else ""
-                print(
-                    f"{result.path}: imported {result.imported}/{result.read} records, "
-                    f"{result.errors} errors{suffix}"
-                )
+                if result.duplicate:
+                    print(f"{result.path}: already consumed ({result.read} records)")
+                else:
+                    print(
+                        f"{result.path}: aggregated {result.imported}/{result.read} records, "
+                        f"{result.errors} errors"
+                    )
             print(f"Imported {total} new records.")
         if arguments.command in {"build", "update"}:
             output = build_report(factory, arguments.output)

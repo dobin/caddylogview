@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Float, Index, Integer, LargeBinary, String
+from sqlalchemy import CheckConstraint, Float, Index, Integer, LargeBinary, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -8,37 +8,44 @@ class Base(DeclarativeBase):
     pass
 
 
-class Event(Base):
-    __tablename__ = "events"
+class HourlyAggregate(Base):
+    __tablename__ = "hourly_aggregates"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    timestamp: Mapped[float] = mapped_column(Float, nullable=False)
-    host: Mapped[str] = mapped_column(String, nullable=False)
-    path: Mapped[str] = mapped_column(String, nullable=False)
-    first_path: Mapped[str] = mapped_column(String, nullable=False)
-    status: Mapped[int] = mapped_column(Integer, nullable=False)
+    hour_start: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String, primary_key=True)
+    first_path: Mapped[str] = mapped_column(String, primary_key=True)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False)
     bytes_sent: Mapped[int] = mapped_column(Integer, nullable=False)
-    visitor: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)
-    record_key: Mapped[bytes | None] = mapped_column(LargeBinary(32), unique=True)
+    visitor_hll: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
     __table_args__ = (
-        Index("ix_events_timestamp", "timestamp"),
-        Index("ix_events_host_timestamp", "host", "timestamp"),
-        Index("ix_events_first_path_timestamp", "first_path", "timestamp"),
-        Index("ix_events_path_timestamp", "path", "timestamp"),
+        CheckConstraint("hits >= 0", name="ck_hourly_aggregates_hits"),
+        CheckConstraint("bytes_sent >= 0", name="ck_hourly_aggregates_bytes"),
+        Index("ix_hourly_aggregates_host_hour", "host", "hour_start"),
     )
 
 
-class ImportState(Base):
-    __tablename__ = "import_states"
+class ConsumedFile(Base):
+    __tablename__ = "consumed_files"
 
-    path: Mapped[str] = mapped_column(String, primary_key=True)
-    device: Mapped[int] = mapped_column(Integer, nullable=False)
-    inode: Mapped[int] = mapped_column(Integer, nullable=False)
-    offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    prefix_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    mtime_ns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_sha256: Mapped[bytes] = mapped_column(LargeBinary(32), primary_key=True)
+    path: Mapped[str] = mapped_column(String, nullable=False)
+    compressed_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mtime_ns: Mapped[int] = mapped_column(Integer, nullable=False)
+    processed_at: Mapped[float] = mapped_column(Float, nullable=False)
+    records_read: Mapped[int] = mapped_column(Integer, nullable=False)
+    records_imported: Mapped[int] = mapped_column(Integer, nullable=False)
+    errors: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class AggregateBounds(Base):
+    __tablename__ = "aggregate_bounds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    minimum_timestamp: Mapped[float] = mapped_column(Float, nullable=False)
+    maximum_timestamp: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (CheckConstraint("id = 1", name="ck_aggregate_bounds_singleton"),)
 
 
 class Metadata(Base):

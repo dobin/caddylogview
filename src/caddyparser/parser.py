@@ -18,9 +18,7 @@ class ParseError(ValueError):
 class ParsedEvent:
     timestamp: float
     host: str
-    path: str
     first_path: str
-    status: int
     bytes_sent: int
     visitor: bytes
 
@@ -61,8 +59,7 @@ def parse_line(line: bytes | str, key: bytes) -> ParsedEvent:
         timestamp = float(record["ts"])
         remote_ip = str(request["remote_ip"])
         host = normalize_host(str(request["host"]))
-        path, first_path = normalize_path(str(request.get("uri", "/")))
-        status = int(record.get("status", 0))
+        _, first_path = normalize_path(str(request.get("uri", "/")))
         size = max(0, int(record.get("size", 0)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ParseError(str(exc)) from exc
@@ -71,4 +68,4 @@ def parse_line(line: bytes | str, key: bytes) -> ParsedEvent:
     visitor = hashlib.blake2b(
         remote_ip.encode("utf-8", "surrogatepass"), key=key, digest_size=16
     ).digest()
-    return ParsedEvent(timestamp, host, path, first_path, status, size, visitor)
+    return ParsedEvent(timestamp, host, first_path, size, visitor)
