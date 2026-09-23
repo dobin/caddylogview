@@ -1,8 +1,11 @@
-# caddyparser
+# caddylogview
 
 Compact, privacy-oriented traffic analytics for newline-delimited Caddy JSON access logs. The importer consumes completed gzip rotations and stores only UTC hourly aggregates by domain and first path section. It never persists individual requests or full URLs.
 
-This is 100% vibe coded.
+This is 100% vibe coded. Its only for my usecase for `r00ted.ch` stats: Simple, space efficient, fast, static html (secure). 
+
+It converts `/var/log/caddy/*` into `.html`.
+
 
 ## Setup
 
@@ -10,9 +13,8 @@ This is 100% vibe coded.
 uv sync --dev
 ```
 
-This schema is intentionally incompatible with earlier request-level databases. Move or delete an existing `stats.sqlite3`, then replay the retained `.log.gz` rotations into a fresh database.
 
-## Recommended Caddy configuration
+## Caddy configuration
 
 Rotate on every UTC clock hour and retain enough files for the importer to catch up after an outage:
 
@@ -39,7 +41,7 @@ Caddy requires a server restart to apply changed options for an existing file ou
 Import completed rotations and build the report:
 
 ```shell
-uv run caddyparser update /var/log/caddy \
+uv run caddylogview update /var/log/caddy \
   --database stats.sqlite3 \
   --output report
 ```
@@ -49,19 +51,22 @@ Directory discovery reads only `*.log.gz`. The active `access.log`, uncompressed
 Import and report generation can also run separately:
 
 ```shell
-uv run caddyparser import /var/log/caddy --database stats.sqlite3
-uv run caddyparser build --database stats.sqlite3 --output report
+uv run caddylogview import /var/log/caddy --database stats.sqlite3
+uv run caddylogview build --database stats.sqlite3 --output report
 ```
+
+
+### cron
 
 Run `update` shortly after each hourly rotation, for example from a systemd timer or cron at minute 5:
 
 ```cron
-5 * * * * cd /opt/caddyparser && uv run caddyparser update /var/log/caddy --database stats.sqlite3 --output /srv/www/traffic
+5 * * * * cd /opt/caddylogview && uv run caddylogview update /var/log/caddy --database stats.sqlite3 --output /srv/www/traffic
 ```
 
 ### systemd timer
 
-For a system-wide timer that runs as Caddy's service user, create `/etc/systemd/system/caddyparser-update.service`. Replace `/var/lib/caddy/.local/bin/uv` with the absolute path returned by `sudo -u caddy -H command -v uv`.
+For a system-wide timer that runs as Caddy's service user, create `/etc/systemd/system/caddylogview-update.service`. Replace `/var/lib/caddy/.local/bin/uv` with the absolute path returned by `sudo -u caddy -H command -v uv`.
 
 ```ini
 [Unit]
@@ -74,10 +79,10 @@ Group=caddy
 WorkingDirectory=/var/lib/caddy
 Environment=HOME=/var/lib/caddy
 Environment=PATH=/var/lib/caddy/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/var/lib/caddy/.local/bin/uv run caddyparser update /var/log/caddy --database stats.sqlite3 --output /srv/www/traffic
+ExecStart=/var/lib/caddy/.local/bin/uv run caddylogview update /var/log/caddy --database stats.sqlite3 --output /srv/www/traffic
 ```
 
-Then create `/etc/systemd/system/caddyparser-update.timer`:
+Then create `/etc/systemd/system/caddylogview-update.timer`:
 
 ```ini
 [Unit]
@@ -93,17 +98,17 @@ WantedBy=timers.target
 
 `OnCalendar=*-*-* *:05:00` runs at five minutes past every hour, allowing the hourly rotation to complete first. `Persistent=true` runs a missed invocation after boot.
 
-Ensure the `caddy` user can read `/var/log/caddy`, write the database and report directories, and traverse `/opt/caddyparser`. Load and enable the timer, then test it immediately:
+Ensure the `caddy` user can read `/var/log/caddy`, write the database and report directories, and traverse `/opt/caddylogview`. Load and enable the timer, then test it immediately:
 
 ```shell
 sudo systemctl daemon-reload
-sudo systemctl enable --now caddyparser-update.timer
-sudo systemctl start caddyparser-update.service
-sudo systemctl status caddyparser-update.service
-sudo journalctl -u caddyparser-update.service --since today
+sudo systemctl enable --now caddylogview-update.timer
+sudo systemctl start caddylogview-update.service
+sudo systemctl status caddylogview-update.service
+sudo journalctl -u caddylogview-update.service --since today
 ```
 
-Check the next scheduled run with `systemctl list-timers caddyparser-update.timer`. Do not enable both this timer and the cron entry.
+Check the next scheduled run with `systemctl list-timers caddylogview-update.timer`. Do not enable both this timer and the cron entry.
 
 Aggregate updates and the consumed-file marker commit in one SQLite transaction. A crash, corrupt gzip stream, or strict parse error leaves the rotation unconsumed and safe to retry. In default non-strict mode malformed records are reported and omitted, while the otherwise valid rotation is consumed.
 
@@ -139,6 +144,7 @@ A small consumed-file table prevents a completed rotation from being counted twi
 - **Ranges:** `1d`, `1m`, `6m`, `12m`, and `all`, aligned to UTC hour boundaries because request-level timestamps are not retained.
 
 The report provides domain summaries, top domains, top sections, bandwidth, and aggregate timelines. Full-URL rankings are intentionally unsupported.
+
 
 ## Operational limitations
 

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from caddyparser.parser import ParseError, normalize_host, normalize_path, parse_line
+from caddylogview.parser import ParseError, normalize_host, normalize_path, parse_line
 
 
 def record(**overrides):

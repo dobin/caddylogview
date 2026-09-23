@@ -1,5 +1,5 @@
 [project]
-name = "caddyparser"
+name = "caddylogview"
 version = "0.1.0"
 description = "Compact static analytics reports for Caddy JSON access logs"
 authors = [
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-caddyparser = "caddyparser.cli:main"
+caddylogview = "caddylogview.cli:main"
 
 [tool.uv]
 package = true
@@ -24,8 +24,8 @@ addopts = "-q"
 [tool.uv.build-backend]
 module-root = "src"
 source-include = [
-    "src/caddyparser/templates/**",
-    "src/caddyparser/web/**",
+    "src/caddylogview/templates/**",
+    "src/caddylogview/web/**",
 ]
 
 [build-system]

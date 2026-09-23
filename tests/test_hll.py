@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 
-from caddyparser.hll import HyperLogLog, SPARSE_LIMIT, union_bytes
+from caddylogview.hll import HyperLogLog, SPARSE_LIMIT, union_bytes
 
 
 def digest(value: int) -> bytes:

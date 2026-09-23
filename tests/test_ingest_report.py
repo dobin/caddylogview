@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from caddyparser.aggregate import build_windows, domain_summary, time_series, top_content
-from caddyparser.cli import main
-from caddyparser.db import create_database
-from caddyparser.ingest import discover_logs, import_log
-from caddyparser.models import ConsumedFile, HourlyAggregate
-from caddyparser.parser import ParseError
-from caddyparser.report import build_report
+from caddylogview.aggregate import build_windows, domain_summary, time_series, top_content
+from caddylogview.cli import main
+from caddylogview.db import create_database
+from caddylogview.ingest import discover_logs, import_log
+from caddylogview.models import ConsumedFile, HourlyAggregate
+from caddylogview.parser import ParseError
+from caddylogview.report import build_report
 
 
 def make_record(ts, ip="192.0.2.1", host="example.test", uri="/docs/a", size=100):
