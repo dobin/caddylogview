@@ -4,9 +4,10 @@ import calendar
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import Select, distinct, func, select
+from sqlalchemy import Select, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Event
@@ -103,22 +104,43 @@ def top_content(session: Session, window: Window) -> dict[str, dict[str, list[di
         else:
             label = Event.host + columns[1]
             group_columns = columns
-        base = _windowed(
+        grouped = _windowed(
             select(
                 label.label("label"),
                 func.count().label("hits"),
                 func.count(distinct(Event.visitor)).label("visitors"),
             ).group_by(*group_columns),
             window,
+        ).cte()
+        ranked = select(
+            grouped,
+            func.row_number()
+            .over(order_by=(grouped.c.hits.desc(), grouped.c.label))
+            .label("hit_rank"),
+            func.row_number()
+            .over(order_by=(grouped.c.visitors.desc(), grouped.c.label))
+            .label("visitor_rank"),
         ).subquery()
-        by_metric: dict[str, list[dict[str, Any]]] = {}
-        for metric in ("hits", "visitors"):
-            ranked = select(base).order_by(base.c[metric].desc(), base.c.label).limit(10)
-            by_metric[metric] = [
+        statement = select(ranked).where(
+            or_(ranked.c.hit_rank <= 10, ranked.c.visitor_rank <= 10)
+        )
+        rows = list(session.execute(statement))
+        output[name] = {
+            "hits": [
                 {"label": row.label, "hits": row.hits, "visitors": row.visitors}
-                for row in session.execute(ranked)
-            ]
-        output[name] = by_metric
+                for row in sorted(
+                    (row for row in rows if row.hit_rank <= 10),
+                    key=lambda row: row.hit_rank,
+                )
+            ],
+            "visitors": [
+                {"label": row.label, "hits": row.hits, "visitors": row.visitors}
+                for row in sorted(
+                    (row for row in rows if row.visitor_rank <= 10),
+                    key=lambda row: row.visitor_rank,
+                )
+            ],
+        }
     return output
 
 
@@ -149,3 +171,42 @@ def time_series(
         hits.append(row_hits)
         visitors.append(row_visitors)
     return {"labels": labels, "hits": hits, "visitors": visitors}
+
+
+def domain_time_series(
+    session: Session, window: Window, hosts: Iterable[str]
+) -> dict[str, dict[str, list[Any]]]:
+    host_list = list(hosts)
+    bucket_count = max(1, math.ceil((window.end - window.start) / window.bucket_seconds))
+    labels = [
+        datetime.fromtimestamp(
+            window.start + index * window.bucket_seconds, timezone.utc
+        ).strftime("%Y-%m-%d %H:%M" if window.bucket_seconds < 86_400 else "%Y-%m-%d")
+        for index in range(bucket_count)
+    ]
+    output = {
+        host: {
+            "labels": labels.copy(),
+            "hits": [0] * bucket_count,
+            "visitors": [0] * bucket_count,
+        }
+        for host in host_list
+    }
+    if not host_list:
+        return output
+
+    bucket = func.floor((Event.timestamp - window.start) / window.bucket_seconds)
+    statement = _windowed(
+        select(
+            Event.host,
+            bucket.label("bucket"),
+            func.count().label("hits"),
+            func.count(distinct(Event.visitor)).label("visitors"),
+        ).group_by(Event.host, bucket),
+        window,
+    ).where(Event.host.in_(host_list))
+    for row in session.execute(statement):
+        index = int(row.bucket)
+        output[row.host]["hits"][index] = row.hits
+        output[row.host]["visitors"][index] = row.visitors
+    return output

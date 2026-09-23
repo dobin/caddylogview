@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,7 +16,7 @@ from .models import Event, ImportState
 from .parser import ParseError, parse_line
 
 PREFIX_SIZE = 4096
-BATCH_SIZE = 1000
+BATCH_SIZE = 4000
 LOG_PATTERNS = ("*.log", "*.log.gz")
 
 
@@ -132,8 +133,9 @@ def _commit_batch(
     with factory.begin() as session:
         imported = 0
         if batch:
-            statement = insert(Event).values(batch).on_conflict_do_nothing().returning(Event.id)
-            imported = len(session.scalars(statement).all())
+            statement = insert(Event).values(batch).on_conflict_do_nothing()
+            session.execute(statement)
+            imported = int(session.scalar(select(func.changes())) or 0)
         state = session.get(ImportState, str(source))
         values = {
             "device": stat.st_dev,

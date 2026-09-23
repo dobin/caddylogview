@@ -11,7 +11,15 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .aggregate import RANGE_LABELS, RANGES, build_windows, domain_summary, time_series, top_content
+from .aggregate import (
+    RANGE_LABELS,
+    RANGES,
+    build_windows,
+    domain_summary,
+    domain_time_series,
+    time_series,
+    top_content,
+)
 from .models import Event
 
 PACKAGE = Path(__file__).parent
@@ -65,9 +73,10 @@ def build_report(factory: sessionmaker[Session], output: str | Path) -> Path:
                 )
                 files = {"all": f"data/series/{key}-all.json"}
                 _write_json(temporary / files["all"], time_series(session, window))
+                domain_series = domain_time_series(session, window, hosts)
                 for host in hosts:
                     files[domain_ids[host]] = f"data/series/{key}-{domain_ids[host]}.json"
-                    _write_json(temporary / files[domain_ids[host]], time_series(session, window, host))
+                    _write_json(temporary / files[domain_ids[host]], domain_series[host])
                 series_map[key] = files
         _write_json(data_dir / "manifest.json", manifest)
         environment = Environment(loader=FileSystemLoader(PACKAGE / "templates"), autoescape=select_autoescape())

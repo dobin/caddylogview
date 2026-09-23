@@ -2,12 +2,19 @@ import gzip
 import json
 import sqlite3
 
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import func, select
 
-from caddyparser.aggregate import build_windows, domain_summary, time_series, top_content
+from caddyparser.aggregate import (
+    build_windows,
+    domain_summary,
+    domain_time_series,
+    time_series,
+    top_content,
+)
 from caddyparser.cli import main
 from caddyparser.db import create_database
-from caddyparser.ingest import import_log
+from caddyparser.ingest import BATCH_SIZE, import_log
 from caddyparser.models import Event
 from caddyparser.report import build_report
 
@@ -105,6 +112,120 @@ def test_directory_imports_plain_and_gzip_logs_without_duplicates(tmp_path, caps
     with factory() as session:
         assert session.scalar(select(func.count()).select_from(Event)) == 2
     engine.dispose()
+
+
+def test_large_batches_count_duplicates_exactly(tmp_path):
+    log = tmp_path / "access.log"
+    unique_records = [make_record(1_700_000_000 + index) for index in range(BATCH_SIZE + 5)]
+    log.write_bytes(b"".join(unique_records + [unique_records[0], unique_records[-1]]))
+    engine, factory = create_database(tmp_path / "stats.sqlite3")
+
+    first = import_log(factory, log)
+    assert first.read == BATCH_SIZE + 7
+    assert first.imported == BATCH_SIZE + 5
+
+    second = import_log(factory, log)
+    assert second.imported == 0
+
+    with log.open("ab") as file:
+        file.write(unique_records[1])
+        file.write(make_record(1_800_000_000))
+    appended = import_log(factory, log)
+    assert appended.read == 2
+    assert appended.imported == 1
+
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Event)) == BATCH_SIZE + 6
+    engine.dispose()
+
+
+def test_grouped_domain_series_matches_individual_queries(tmp_path):
+    newest = 1_700_000_000
+    log = tmp_path / "access.log"
+    log.write_bytes(
+        make_record(newest - 90_000, host="old.test")
+        + make_record(newest - 3_600, host="a.test", ip="192.0.2.1")
+        + make_record(newest - 3_500, host="a.test", ip="192.0.2.2")
+        + make_record(newest - 3_400, host="b.test", ip="192.0.2.1")
+        + make_record(newest, host="b.test", ip="192.0.2.3")
+    )
+    engine, factory = create_database(tmp_path / "stats.sqlite3")
+    import_log(factory, log)
+
+    hosts = ["a.test", "b.test", "old.test"]
+    with factory() as session:
+        window = build_windows(session)["1d"]
+        grouped = domain_time_series(session, window, hosts)
+        assert list(grouped) == hosts
+        for host in hosts:
+            assert grouped[host] == time_series(session, window, host)
+        assert not any(grouped["old.test"]["hits"])
+    engine.dispose()
+
+
+def test_top_content_limits_and_orders_both_rankings(tmp_path):
+    log = tmp_path / "access.log"
+    records = []
+    timestamp = 1_700_000_000
+    for index in range(12):
+        path = f"/item-{index:02d}"
+        hit_count = 24 - index
+        visitor_count = index + 1
+        for hit in range(hit_count):
+            records.append(
+                make_record(
+                    timestamp + index * 100 + hit,
+                    uri=path,
+                    ip=f"192.0.{index}.{hit % visitor_count + 1}",
+                )
+            )
+    log.write_bytes(b"".join(records))
+    engine, factory = create_database(tmp_path / "stats.sqlite3")
+    import_log(factory, log)
+
+    with factory() as session:
+        top = top_content(session, build_windows(session)["all"])["urls"]
+        assert len(top["hits"]) == 10
+        assert len(top["visitors"]) == 10
+        assert [row["label"] for row in top["hits"]] == [
+            f"example.test/item-{index:02d}" for index in range(10)
+        ]
+        assert [row["label"] for row in top["visitors"]] == [
+            f"example.test/item-{index:02d}" for index in range(11, 1, -1)
+        ]
+    engine.dispose()
+
+
+def test_optimized_aggregations_use_fixed_query_counts(tmp_path):
+    log = tmp_path / "access.log"
+    log.write_bytes(
+        make_record(1_700_000_000, host="a.test")
+        + make_record(1_700_000_100, host="b.test")
+        + make_record(1_700_000_200, host="c.test")
+    )
+    engine, factory = create_database(tmp_path / "stats.sqlite3")
+    import_log(factory, log)
+    statements = []
+
+    def record_select(*args):
+        statement = args[2]
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            statements.append(statement)
+
+    sqlalchemy_event.listen(engine, "before_cursor_execute", record_select)
+    try:
+        with factory() as session:
+            window = build_windows(session)["all"]
+            statements.clear()
+            domain_time_series(session, window, ["a.test", "b.test", "c.test"])
+            assert len(statements) == 1
+
+            statements.clear()
+            top_content(session, window)
+            assert len(statements) == 3
+    finally:
+        sqlalchemy_event.remove(engine, "before_cursor_execute", record_select)
+        engine.dispose()
 
 
 def test_ranges_keep_requested_window_when_history_is_short(tmp_path):
