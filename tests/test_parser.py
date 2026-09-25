@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from caddylogview.parser import ParseError, normalize_host, normalize_path, parse_line
+from caddylogview.parser import ParseError, normalize_host, normalize_path, normalize_referrer, parse_line
 
 
 def record(**overrides):
@@ -25,6 +25,7 @@ def test_parses_only_analytics_fields():
     event = parse_line(record(), b"k" * 32)
     assert event.host == "example.com"
     assert event.first_path == "/docs"
+    assert event.referrer_host is None
     assert event.bytes_sent == 42
     assert len(event.visitor) == 16
     assert b"192.0.2.1" not in event.visitor
@@ -44,6 +45,19 @@ def test_normalizes_host(value, expected):
 )
 def test_normalizes_path(uri, expected):
     assert normalize_path(uri) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("HTTPS://News.Example:443/story?tracking=1", "news.example"),
+        ("/internal/path", None),
+        ("ftp://example.com/file", None),
+        ("not a URL", None),
+    ],
+)
+def test_normalizes_referrer_host(value, expected):
+    assert normalize_referrer(value) == expected
 
 
 def test_rejects_missing_required_fields():

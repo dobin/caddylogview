@@ -19,6 +19,7 @@ class ParsedEvent:
     timestamp: float
     host: str
     first_path: str
+    referrer_host: str | None
     bytes_sent: int
     visitor: bytes
 
@@ -33,6 +34,25 @@ def normalize_host(value: str) -> str:
     if not host:
         raise ParseError("missing request host")
     return host
+
+
+def normalize_referrer(value: str) -> str | None:
+    try:
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        return normalize_host(parsed.hostname)
+    except (TypeError, ValueError, ParseError):
+        return None
+
+
+def _referrer_host(headers: object) -> str | None:
+    if not isinstance(headers, dict):
+        return None
+    value = next((value for name, value in headers.items() if name.lower() == "referer"), None)
+    if isinstance(value, list):
+        value = value[0] if value else None
+    return normalize_referrer(value) if isinstance(value, str) else None
 
 
 def normalize_path(uri: str) -> tuple[str, str]:
@@ -60,6 +80,7 @@ def parse_line(line: bytes | str, key: bytes) -> ParsedEvent:
         remote_ip = str(request["remote_ip"])
         host = normalize_host(str(request["host"]))
         _, first_path = normalize_path(str(request.get("uri", "/")))
+        referrer_host = _referrer_host(request.get("headers"))
         size = max(0, int(record.get("size", 0)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ParseError(str(exc)) from exc
@@ -68,4 +89,4 @@ def parse_line(line: bytes | str, key: bytes) -> ParsedEvent:
     visitor = hashlib.blake2b(
         remote_ip.encode("utf-8", "surrogatepass"), key=key, digest_size=16
     ).digest()
-    return ParsedEvent(timestamp, host, first_path, size, visitor)
+    return ParsedEvent(timestamp, host, first_path, referrer_host, size, visitor)

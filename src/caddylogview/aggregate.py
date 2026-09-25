@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .hll import HyperLogLog
-from .models import AggregateBounds, HourlyAggregate
+from .models import AggregateBounds, HourlyAggregate, HourlyReferrerAggregate
 
 RANGES = ("1d", "1m", "6m", "12m", "all")
 RANGE_LABELS = {
@@ -121,6 +121,26 @@ def top_content(session: Session, window: Window) -> dict[str, dict[str, list[di
             for metric in ("hits", "visitors")
         }
     return output
+
+
+def top_referrers(
+    session: Session, window: Window, *, site_domain: str
+) -> list[dict[str, Any]]:
+    grouped: dict[str, int] = {}
+    rows = session.scalars(
+        select(HourlyReferrerAggregate).where(
+            HourlyReferrerAggregate.hour_start >= window.start,
+            HourlyReferrerAggregate.hour_start < window.end,
+        )
+    )
+    for row in rows:
+        if row.referrer_host == site_domain or row.referrer_host.endswith(f".{site_domain}"):
+            continue
+        grouped[row.referrer_host] = grouped.get(row.referrer_host, 0) + row.hits
+    return [
+        {"referrer": referrer, "hits": hits}
+        for referrer, hits in sorted(grouped.items(), key=lambda item: (-item[1], item[0]))[:20]
+    ]
 
 
 def _empty_series(window: Window) -> dict[str, list[Any]]:

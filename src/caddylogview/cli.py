@@ -26,12 +26,18 @@ def parser() -> argparse.ArgumentParser:
 
     building = commands.add_parser("build", help="Generate the static report")
     building.add_argument("--output", default="report", help="Output directory")
+    building.add_argument(
+        "--site-domain", default="r00ted.ch", help="First-party domain to exclude from referrers"
+    )
     database_option(building)
 
     updating = commands.add_parser("update", help="Import completed rotations and generate the report")
     updating.add_argument("logs", nargs="+", type=Path)
     updating.add_argument("--strict", action="store_true", help="Stop on the first malformed record")
     updating.add_argument("--output", default="report", help="Output directory")
+    updating.add_argument(
+        "--site-domain", default="r00ted.ch", help="First-party domain to exclude from referrers"
+    )
     database_option(updating)
     return root
 
@@ -61,7 +67,7 @@ def main(argv: list[str] | None = None) -> None:
                     )
             print(f"Imported {total} new records.")
         if arguments.command in {"build", "update"}:
-            output = build_report(factory, arguments.output)
+            output = build_report(factory, arguments.output, site_domain=arguments.site_domain)
             print(f"Report written to {output}")
     finally:
         engine.dispose()

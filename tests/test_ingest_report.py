@@ -6,16 +6,19 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from caddylogview.aggregate import build_windows, domain_summary, time_series, top_content
+from caddylogview.aggregate import build_windows, domain_summary, time_series, top_content, top_referrers
 from caddylogview.cli import main
 from caddylogview.db import create_database
 from caddylogview.ingest import discover_logs, import_log
-from caddylogview.models import ConsumedFile, HourlyAggregate
+from caddylogview.models import ConsumedFile, HourlyAggregate, HourlyReferrerAggregate
 from caddylogview.parser import ParseError
 from caddylogview.report import build_report
 
 
-def make_record(ts, ip="192.0.2.1", host="example.test", uri="/docs/a", size=100):
+def make_record(ts, ip="192.0.2.1", host="example.test", uri="/docs/a", size=100, referrer=None):
+    headers = {"X-Auth-Password": ["testing12"]}
+    if referrer is not None:
+        headers["Referer"] = [referrer]
     return json.dumps(
         {
             "ts": ts,
@@ -23,7 +26,7 @@ def make_record(ts, ip="192.0.2.1", host="example.test", uri="/docs/a", size=100
                 "remote_ip": ip,
                 "host": host,
                 "uri": uri,
-                "headers": {"X-Auth-Password": ["testing12"]},
+                "headers": headers,
             },
             "status": 200,
             "size": size,
@@ -49,8 +52,8 @@ def test_hourly_aggregation_idempotence_privacy_and_report(tmp_path):
     newest = 1_700_010_000
     rotation = tmp_path / "access-1.log.gz"
     records = [
-        make_record(newest - 4_000, uri="/docs/a?secret=yes", size=20),
-        make_record(newest - 3_900, uri="/docs/b", size=30),
+        make_record(newest - 4_000, uri="/docs/a?secret=yes", size=20, referrer="https://news.test/story?token=secret"),
+        make_record(newest - 3_900, uri="/docs/b", size=30, referrer="https://r00ted.ch/about"),
         make_record(newest, ip="192.0.2.2", host="other.test", uri="/", size=50),
     ]
     write_rotation(rotation, records)
@@ -70,11 +73,15 @@ def test_hourly_aggregation_idempotence_privacy_and_report(tmp_path):
         assert session.scalar(select(func.count()).select_from(ConsumedFile)) == 1
         assert session.scalar(select(func.sum(HourlyAggregate.hits))) == 3
         assert session.scalar(select(func.sum(HourlyAggregate.bytes_sent))) == 100
+        assert session.scalar(select(func.sum(HourlyReferrerAggregate.hits))) == 2
         windows = build_windows(session)
         summary = domain_summary(session, windows["all"])
         assert sum(row["hits"] for row in summary) == 3
         assert summary[0]["visitors"] >= 1
         assert set(top_content(session, windows["all"])) == {"domains", "sections"}
+        assert top_referrers(session, windows["all"], site_domain="r00ted.ch") == [
+            {"referrer": "news.test", "hits": 1}
+        ]
         assert sum(time_series(session, windows["all"])["hits"]) == 3
 
     report = build_report(factory, tmp_path / "report")
@@ -85,6 +92,10 @@ def test_hourly_aggregation_idempotence_privacy_and_report(tmp_path):
         assert secret not in report_text
     assert "Full URLs" not in report_text
     assert "Est. visitors" in report_text
+    assert "news.test" in report_text
+    assert json.loads((report / "data" / "all.json").read_text())["referrers"] == [
+        {"referrer": "news.test", "hits": 1}
+    ]
 
     connection = sqlite3.connect(database)
     dump = "\n".join(connection.iterdump())
@@ -93,6 +104,29 @@ def test_hourly_aggregation_idempotence_privacy_and_report(tmp_path):
     assert "events" not in tables
     for secret in ("testing12", "192.0.2.1", "secret=yes", "/docs/a"):
         assert secret not in dump
+    engine.dispose()
+
+
+def test_referrer_ranking_excludes_first_party_subdomains_and_limits_results(tmp_path):
+    newest = 1_700_000_000
+    rotation = tmp_path / "access-1.log.gz"
+    records = [
+        make_record(newest, referrer="https://r00ted.ch/home"),
+        make_record(newest, referrer="https://www.r00ted.ch/home"),
+        make_record(newest, referrer="https://notr00ted.ch/home"),
+    ]
+    records.extend(
+        make_record(newest, referrer=f"https://source-{index:02}.test/article")
+        for index in range(21)
+    )
+    write_rotation(rotation, records)
+    engine, factory = create_database(tmp_path / "stats.sqlite3")
+    import_log(factory, rotation)
+    with factory() as session:
+        referrers = top_referrers(session, build_windows(session)["all"], site_domain="r00ted.ch")
+    assert len(referrers) == 20
+    assert referrers[0] == {"referrer": "notr00ted.ch", "hits": 1}
+    assert all(not row["referrer"].endswith(".r00ted.ch") for row in referrers)
     engine.dispose()
 
 

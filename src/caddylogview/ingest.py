@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .db import visitor_key
 from .hll import HyperLogLog
-from .models import AggregateBounds, ConsumedFile, HourlyAggregate
+from .models import AggregateBounds, ConsumedFile, HourlyAggregate, HourlyReferrerAggregate
 from .parser import ParseError, parse_line
 
 LOG_PATTERN = "*.log.gz"
@@ -54,6 +54,7 @@ def import_log(
     stat = source.stat()
     digest = hashlib.sha256()
     deltas: dict[tuple[int, str, str], _Delta] = {}
+    referrer_deltas: dict[tuple[int, str, str], int] = {}
     minimum: float | None = None
     maximum: float | None = None
 
@@ -80,6 +81,9 @@ def import_log(
             delta.hits += 1
             delta.bytes_sent += event.bytes_sent
             delta.visitors.add(event.visitor)
+            if event.referrer_host is not None:
+                referrer_key = (hour_start, event.host, event.referrer_host)
+                referrer_deltas[referrer_key] = referrer_deltas.get(referrer_key, 0) + 1
             minimum = event.timestamp if minimum is None else min(minimum, event.timestamp)
             maximum = event.timestamp if maximum is None else max(maximum, event.timestamp)
 
@@ -128,6 +132,24 @@ def import_log(
                 },
             )
             session.execute(statement)
+
+        for (hour_start, host, referrer_host), hits in referrer_deltas.items():
+            statement = insert(HourlyReferrerAggregate).values(
+                hour_start=hour_start,
+                host=host,
+                referrer_host=referrer_host,
+                hits=hits,
+            )
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[
+                        HourlyReferrerAggregate.hour_start,
+                        HourlyReferrerAggregate.host,
+                        HourlyReferrerAggregate.referrer_host,
+                    ],
+                    set_={"hits": HourlyReferrerAggregate.hits + statement.excluded.hits},
+                )
+            )
 
         if minimum is not None and maximum is not None:
             statement = insert(AggregateBounds).values(

@@ -43,7 +43,8 @@ Import completed rotations and build the report:
 ```shell
 uv run caddylogview update /var/log/caddy \
   --database stats.sqlite3 \
-  --output report
+    --output report \
+    --site-domain r00ted.ch
 ```
 
 Directory discovery reads only `*.log.gz`. The active `access.log`, uncompressed `.log` files, and unrelated files are intentionally ignored. Dashboard freshness therefore follows the rotation schedule.
@@ -129,7 +130,7 @@ For every `(UTC hour, domain, first path section)` group, SQLite stores:
 - exact transmitted-byte total;
 - a mergeable HyperLogLog sketch for estimated unique visitors.
 
-Visitor sketches use keyed hashes of client IP addresses and precision `p=12`, with an expected standard error of approximately 1.6%. Visitor values are estimates; hits and bytes are exact. Raw IP addresses, headers, cookies, query strings, full paths, original JSON records, and per-request hashes are not stored.
+Visitor sketches use keyed hashes of client IP addresses and precision `p=12`, with an expected standard error of approximately 1.6%. Visitor values are estimates; hits and bytes are exact. Raw IP addresses, headers, cookies, query strings, full paths, original JSON records, and per-request hashes are not stored. Referrer URLs are reduced to their hostname and aggregated by hour; full referrer URLs are not retained.
 
 A small consumed-file table prevents a completed rotation from being counted twice. Its identity is the SHA-256 digest of decompressed content, so renamed or recompressed copies are still skipped. Distinct rotation files are assumed not to overlap, as expected with normal Caddy rotation. Duplicate lines inside one new rotation represent separate logged requests and are counted separately.
 
@@ -143,7 +144,7 @@ A small consumed-file table prevents a completed rotation from being counted twi
 - **Section:** normalized domain plus the first decoded path element, such as `example.com/docs`. Query strings and fragments are discarded.
 - **Ranges:** `1d`, `1m`, `6m`, `12m`, and `all`, aligned to UTC hour boundaries because request-level timestamps are not retained.
 
-The report provides domain summaries, top domains, top sections, bandwidth, and aggregate timelines. Full-URL rankings are intentionally unsupported.
+The report provides domain summaries, top domains, top sections, top 20 external referrers, bandwidth, and aggregate timelines. `--site-domain` controls the first-party domain excluded from referrer rankings and defaults to `r00ted.ch`. Full-URL rankings are intentionally unsupported.
 
 
 ## Operational limitations

@@ -18,8 +18,10 @@ from .aggregate import (
     domain_summary,
     domain_time_series,
     top_content,
+    top_referrers,
 )
 from .models import AggregateBounds, HourlyAggregate
+from .parser import normalize_host
 
 PACKAGE = Path(__file__).parent
 
@@ -29,7 +31,10 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
-def build_report(factory: sessionmaker[Session], output: str | Path) -> Path:
+def build_report(
+    factory: sessionmaker[Session], output: str | Path, *, site_domain: str = "r00ted.ch"
+) -> Path:
+    site_domain = normalize_host(site_domain)
     destination = Path(output).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
@@ -73,6 +78,7 @@ def build_report(factory: sessionmaker[Session], output: str | Path) -> Path:
                         },
                         "domains": domain_summary(session, window),
                         "top": top_content(session, window),
+                        "referrers": top_referrers(session, window, site_domain=site_domain),
                     },
                 )
                 domain_series = domain_time_series(session, window, hosts)

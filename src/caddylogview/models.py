@@ -25,6 +25,20 @@ class HourlyAggregate(Base):
     )
 
 
+class HourlyReferrerAggregate(Base):
+    __tablename__ = "hourly_referrer_aggregates"
+
+    hour_start: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String, primary_key=True)
+    referrer_host: Mapped[str] = mapped_column(String, primary_key=True)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("hits >= 0", name="ck_hourly_referrer_aggregates_hits"),
+        Index("ix_hourly_referrer_aggregates_host_hour", "host", "hour_start"),
+    )
+
+
 class ConsumedFile(Base):
     __tablename__ = "consumed_files"
 

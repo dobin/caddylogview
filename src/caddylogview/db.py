@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from .hll import union_bytes
 from .models import Base, Metadata
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 def _check_schema(engine: Engine) -> None:
