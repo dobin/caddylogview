@@ -91,7 +91,7 @@ def test_hourly_aggregation_idempotence_privacy_and_report(tmp_path):
     for secret in ("testing12", "192.0.2.1", "secret=yes", "/docs/a"):
         assert secret not in report_text
     assert "Full URLs" not in report_text
-    assert "Est. visitors" in report_text
+    assert "visitors" in report_text
     assert "news.test" in report_text
     assert json.loads((report / "data" / "all.json").read_text())["referrers"] == [
         {"referrer": "news.test", "hits": 1}

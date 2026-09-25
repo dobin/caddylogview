@@ -35,11 +35,11 @@
     </section>
     <section class="tops wide">
       <div class="heading"><div><p class="eyebrow">POPULAR CONTENT</p><h2>Top 10</h2></div>
-        <label>Rank by<select id="metric"><option value="hits">Hits</option><option value="visitors">Estimated visitors</option></select></label>
+        <label>Rank by<select id="metric"><option value="hits">Hits</option><option value="visitors" selected>Estimated visitors</option></select></label>
       </div>
       <div class="tables">
         {% for key, title in (("domains", "Domains"), ("sections", "Sections")) %}
-        <article class="card"><h3>{{ title }}</h3><table><thead><tr><th>Content</th><th>Hits</th><th>Est. visitors</th></tr></thead><tbody id="top-{{ key }}"></tbody></table></article>
+        <article class="card"><h3>{{ title }}</h3><table><thead><tr><th>Content</th><th>Hits</th><th>visitors</th></tr></thead><tbody id="top-{{ key }}"></tbody></table></article>
         {% endfor %}
       </div>
     </section>
